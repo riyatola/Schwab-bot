@@ -1,0 +1,14 @@
+[Unit]
+Description=Schwab Options Scanner
+After=network.target
+
+[Service]
+Type=simple
+User=your-username  # Replace with your VPS username (e.g., root, ubuntu)
+WorkingDirectory=/home/your-username/schwab-options-bot  # Replace with your project path
+ExecStart=/home/your-username/schwab-options-bot/venv/bin/python /home/your-username/schwab-options-bot/scanner.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
