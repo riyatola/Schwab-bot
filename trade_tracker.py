@@ -43,7 +43,6 @@ def ensure_trade_outcome_columns(conn: sqlite3.Connection):
         "ALTER TABLE trades ADD COLUMN stop_loss REAL",      # stop loss level (absolute price)
         "ALTER TABLE trades ADD COLUMN take_profit REAL",   # take profit level (absolute price)
         "ALTER TABLE trades ADD COLUMN is_credit BOOLEAN", # whether this was a credit trade
-        "ALTER TABLE trades ADD COLUMN expiration TEXT",     # expiration date of the position
         "ALTER TABLE trades ADD COLUMN exit_approval_id TEXT", # if we generated an exit approval
     ):
         try:
@@ -68,11 +67,11 @@ class TradeTracker:
         import json
         self.conn.execute(
             "UPDATE trades SET strategy=?, score_at_entry=?, features_json=?, outcome='OPEN', "
-            "entry_price=?, stop_loss=?, take_profit=?, is_credit=?, expiration=? WHERE id=?",
+            "entry_price=?, stop_loss=?, take_profit=?, is_credit=? WHERE id=?",
             (candidate.get("strategy"), candidate.get("score"),
              json.dumps(_extract_features(candidate)),
              candidate.get("est_price"), stop_loss, take_profit,
-             candidate.get("is_credit"), candidate.get("expiration"), trade_id),
+             candidate.get("is_credit"), trade_id),
         )
         self.conn.commit()
 

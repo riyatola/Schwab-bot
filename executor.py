@@ -67,31 +67,28 @@ class Executor:
             payload = build_order_payload(candidate)
         log.info("Submitting order: %s", payload)
 
-        resp = self.client.place_order(self.account_hash, payload)
+        resp = self.client.order_place(self.account_hash, payload)
         if resp.status_code not in (200, 201):
-            self.db.record_trade(approval_id, candidate["symbol"], payload, None, "FAILED")
+            self.db.record_trade(approval_id, candidate["symbol"], candidate.get("strategy"),
+                                 payload, None, "FAILED")
             raise RuntimeError(f"Schwab order rejected: {resp.status_code} {resp.text}")
 
         # Schwab returns the new order's location in a Location header, not the body
         order_url = resp.headers.get("Location", "")
         order_id = order_url.rsplit("/", 1)[-1] if order_url else "unknown"
-        trade_id = self.db.record_trade(approval_id, candidate["symbol"], payload, order_id, "SUBMITTED")
+        # Write status='EXECUTED' (not 'SUBMITTED'): trade_tracker, exit_manager
+        # and the circuit breaker all key off status='EXECUTED' to find live
+        # positions. 'SUBMITTED' meant no trade was ever tracked to an outcome.
+        trade_id = self.db.record_trade(approval_id, candidate["symbol"], candidate.get("strategy"),
+                                        payload, order_id, "EXECUTED")
 
         if self.trade_tracker and not candidate.get("trigger_type"):
             # Only record entry context for entry trades (not exits)
             try:
-                # Get default stop/take from config as percent of entry price
+                # Get default stop/take from config
                 strategy = candidate.get("strategy")
-                stop_loss_pct = self.cfg.get("exits", {}).get("default_stop_loss_pct", {}).get(strategy)
-                take_profit_pct = self.cfg.get("exits", {}).get("default_take_profit_pct", {}).get(strategy)
-                entry_price = candidate.get("est_price")
-                
-                stop_loss = None
-                take_profit = None
-                if stop_loss_pct is not None and entry_price:
-                    stop_loss = round(entry_price * stop_loss_pct, 4)
-                if take_profit_pct is not None and entry_price:
-                    take_profit = round(entry_price * take_profit_pct, 4)
+                stop_loss = self.cfg.get("exits", {}).get("default_stop_loss", {}).get(strategy)
+                take_profit = self.cfg.get("exits", {}).get("default_take_profit", {}).get(strategy)
                 self.trade_tracker.record_entry_context(trade_id, candidate, stop_loss, take_profit)
             except Exception:
                 log.exception("Failed to record entry context for trade %s — learning data will be incomplete "

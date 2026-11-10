@@ -82,18 +82,21 @@ DEFAULTS = {
         "earnings_vol": 0.0,    # long straddles are long-premium too
         "credit_spreads": 0.5,  # defined-risk: halve size, don't zero
         "wheel": 0.5,
+        "leaps": 0.5,           # deep-ITM but still long premium: halve, don't zero
     },
     "risk_on_multipliers": {
         "directional": 1.15,    # modest boost
         "earnings_vol": 1.15,
         "credit_spreads": 1.05,
         "wheel": 1.05,
+        "leaps": 1.10,
     },
     "neutral_multipliers": {
         "directional": 1.0,
         "earnings_vol": 1.0,
         "credit_spreads": 1.0,
         "wheel": 1.0,
+        "leaps": 1.0,
     },
 }
 

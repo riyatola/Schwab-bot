@@ -2,7 +2,8 @@
 Backtesting engine.
 
 Runs your ACTUAL strategy modules (strategies/credit_spreads.py,
-strategies/directional.py — see SUPPORTED_STRATEGIES below) unmodified,
+strategies/directional.py, strategies/leaps.py — see SUPPORTED_STRATEGIES
+below) unmodified,
 day by day, over historical data, so a strategy code change gets validated
 against history before it ever reaches a live scan. Nothing in
 strategies/*.py needs to change to be backtested — that was a hard
@@ -22,6 +23,13 @@ WHAT THIS DOES NOT DO
   which a backtest of a fresh account doesn't have. Both would silently
   produce zero candidates if you tried anyway — better to be explicit
   they're out of scope for now.
+- LEAPS (strategies/leaps.py) IS supported, but in synthetic mode its P&L
+  is a LOGIC CHECK ONLY, not a profit estimate. synthetic_chain prices with
+  q=0 (no dividends) and a single flat IV with no skew or term structure,
+  while a deep-ITM long-dated call's extrinsic value is dominated by carry
+  and dividends — exactly the two inputs the synthetic model omits. Do not
+  tune LEAPS parameters on synthetic numbers. It also needs ~200 trading
+  days of warm-up before its 200-DMA filter has anything to read.
 - Option pricing is either (a) real recorded snapshots from
   timeseries.TimeSeriesStore if you've been running record_option_chain_snapshot
   on your live scan cycle, or (b) synthetic Black-Scholes pricing
@@ -86,8 +94,8 @@ import statistics
 from datetime import date, datetime, timedelta
 
 from bs_pricing import synthetic_chain, bs_price_and_delta, realized_vol_estimate
-from strategies import credit_spreads, directional
-from strategies.base import parse_occ_symbol
+from strategies import credit_spreads, directional, leaps
+from strategies.base import parse_occ_symbol, set_reference_date
 from sentiment import HistoricalRegimeEngine
 
 log = logging.getLogger("backtest")
@@ -95,6 +103,7 @@ log = logging.getLogger("backtest")
 SUPPORTED_STRATEGIES = {
     "credit_spreads": credit_spreads.scan,
     "directional": directional.scan,
+    "leaps": leaps.scan,
 }
 
 
@@ -123,6 +132,10 @@ class BacktestMarketData:
     def set_as_of(self, as_of: date):
         self._as_of = as_of
         self._chain_cache = {}  # Clear chain cache when date changes
+        # strategies.base.dte() reads the wall clock by default; point it at
+        # the simulated day so a replayed chain's DTE is measured against
+        # `as_of`, not the real today (see that module's comment).
+        set_reference_date(as_of)
 
     def _bars(self, symbol: str) -> list[dict]:
         if symbol not in self._bars_cache:
@@ -219,6 +232,19 @@ class BacktestMarketData:
         # Scale [-1, 1] range to 0-100 to match ADX's typical 0-100 range
         return float(abs(raw_strength) * 100)
 
+    def get_sma(self, symbol: str, n: int) -> float | None:
+        """Simple moving average of the last `n` daily closes up to (and
+        including) `as_of`, or None if there isn't enough history yet —
+        mirrors MarketDataAdapter.get_sma so LEAPS' 200-DMA / 50-DMA
+        extension filters behave identically live and in backtest. Only ever
+        reads bars with ts <= as_of, so there's no lookahead."""
+        if not n or n <= 0:
+            return None
+        closes = self._closes(symbol)
+        if len(closes) < n:
+            return None
+        return sum(closes[-n:]) / n
+
     # ---------- option chain ----------
 
     def get_option_chain(self, symbol: str, dte_min: int, dte_max: int) -> dict:
@@ -248,10 +274,25 @@ class BacktestMarketData:
         iv = realized_vol_estimate(closes) if len(closes) > 21 else 0.30
 
         expirations = []
-        d = dte_min
-        while d <= dte_max:
-            expirations.append(self._as_of + timedelta(days=d))
-            d += 7  # weekly-spaced synthetic expirations across the window
+        if dte_min > 90:
+            # Long-dated (LEAPS) windows: monthly-spaced expirations aligned
+            # to 30-day boundaries from as_of. Anchoring the grid (rather
+            # than starting at dte_min like the weekly case) is what lets
+            # leg_spread_pct/_get_leg_price's leg_dte ± 7 window round-trip
+            # back to exactly this expiration, so a LEAPS leg is actually
+            # found instead of falling through to the Black-Scholes
+            # fallback. Weekly spacing across 365-730 DTE would also build
+            # ~50 expirations x ~40 strikes x 2 sides for no benefit.
+            step = 30
+            d = ((dte_min + step - 1) // step) * step
+            while d <= dte_max:
+                expirations.append(self._as_of + timedelta(days=d))
+                d += step
+        else:
+            d = dte_min
+            while d <= dte_max:
+                expirations.append(self._as_of + timedelta(days=d))
+                d += 7  # weekly-spaced synthetic expirations across the window
         if not expirations:
             expirations = [self._as_of + timedelta(days=(dte_min + dte_max) // 2)]
 
@@ -259,6 +300,16 @@ class BacktestMarketData:
         self._chain_cache[cache_key] = chain
         return chain    
 
+
+    def _leg_dte_window(self, parsed: dict) -> tuple[int, int]:
+        """DTE window (±7 days) around a leg's own expiration, measured from
+        `as_of`. Mirrors MarketDataAdapter.leg_spread_pct's window. The old
+        hardcoded 21-60 window meant a LEAPS leg was never found in the
+        chain and fell through to the Black-Scholes fallback — and, in the
+        spread gate, silently 'passed' instead of being checked."""
+        exp = datetime.strptime(parsed["expiration"], "%Y-%m-%d").date()
+        leg_dte = (exp - self._as_of).days
+        return max(0, leg_dte - 7), leg_dte + 7
 
     def leg_spread_pct(self, leg: dict, as_of: date):
         """Bid/ask spread as a fraction of mid for one leg's contract, or
@@ -269,7 +320,7 @@ class BacktestMarketData:
         skipped rather than traded through unrealistic assumed slippage."""
         parsed = parse_occ_symbol(leg["occ_symbol"]) if leg.get("occ_symbol") else leg
         symbol = parsed.get("underlying") or parsed.get("symbol")
-        dte_min, dte_max = 21, 60
+        dte_min, dte_max = self._leg_dte_window(parsed)
         chain = self.get_option_chain(symbol, dte_min, dte_max)
         target_exp = parsed["expiration"]
         option_type = parsed["option_type"]
@@ -294,7 +345,7 @@ class BacktestMarketData:
         passive resting limit — see calculate_fill_price's docstring and
         AUDIT_FINDINGS.md #9."""
         symbol = parsed["underlying"] if "underlying" in parsed else parsed.get("symbol")
-        dte_min, dte_max = 21, 60  # Reasonable window to find chain
+        dte_min, dte_max = self._leg_dte_window(parsed)  # window around THIS leg's expiry (LEAPS-safe)
         chain = self.get_option_chain(symbol, dte_min, dte_max)
         
         # Calculate tiered slippage
@@ -412,9 +463,13 @@ class Trade:
 
 
 class BacktestResult:
-    def __init__(self, trades: list[Trade], equity_curve: list[tuple]):
+    def __init__(self, trades: list[Trade], equity_curve: list[tuple], underlying_bars: dict = None):
         self.trades = trades
         self.equity_curve = equity_curve  # [(date_iso, equity), ...]
+        # {symbol: [{"ts","close",...}, ...]} for the underlyings actually
+        # traded, so summary() can benchmark against buy-and-hold shares of
+        # the same names (the comparison that matters for LEAPS).
+        self.underlying_bars = underlying_bars or {}
 
     def summary(self, spy_bars: list[dict] = None) -> str:
         closed = [t for t in self.trades if t.realized_pnl is not None]
@@ -486,6 +541,22 @@ class BacktestResult:
             else:
                 lines.append("")
                 lines.append("vs SPY buy-and-hold: SPY bars didn't cover this window — skipped.")
+
+        # -- buy-and-hold the SAME underlyings, equal weight (the benchmark
+        # that actually matters for LEAPS: a stock-replacement LEAP only
+        # wins if it delivers comparable upside for materially less capital
+        # without a worse drawdown once extrinsic cost is paid) --
+        if self.underlying_bars:
+            shares = self.buy_shares_comparison(self.underlying_bars)
+            if shares and shares["strategy_return_pct"] is not None:
+                lines.append("")
+                verdict = "BEAT" if shares["beat_shares"] else "did NOT beat"
+                lines.append(
+                    f"vs buying shares of the traded underlyings (equal-weight, "
+                    f"{shares['n_symbols']} name(s)): strategy {shares['strategy_return_pct']:+.1f}%  |  "
+                    f"shares {shares['shares_return_pct']:+.1f}%  |  shares max drawdown "
+                    f"{shares['shares_max_drawdown_pct']:.1f}%  |  strategy {verdict} shares"
+                )
 
         return "\n".join(lines)
 
@@ -574,6 +645,58 @@ class BacktestResult:
             "beat_spy": bool(
                 strategy_return is not None and spy_return is not None and strategy_return > spy_return
             ),
+        }
+
+    def buy_shares_comparison(self, underlying_bars: dict) -> dict | None:
+        """Equal-weight buy-and-hold of the underlyings this run actually
+        traded, over the same window as the equity curve. This is the
+        benchmark section 8.6 of the LEAPS spec asks for: a stock-replacement
+        LEAP is only worth the operational complexity (and the extrinsic
+        cost of carry) if it roughly matches holding the shares for less
+        capital, without a worse drawdown.
+
+        underlying_bars: {symbol: [{"ts": iso_date, "close": float}, ...]}.
+        Returns None if no symbol has usable closes over the window rather
+        than comparing against a partial/empty set."""
+        if not self.equity_curve or not underlying_bars:
+            return None
+        start_date, end_date = self.equity_curve[0][0], self.equity_curve[-1][0]
+
+        returns, drawdowns = [], []
+        for bars in underlying_bars.values():
+            by_date = {b["ts"]: b["close"] for b in bars if b.get("close")}
+            if not by_date:
+                continue
+            s = start_date if start_date in by_date else next(
+                (d for d in sorted(by_date) if d >= start_date), None)
+            e = end_date if end_date in by_date else next(
+                (d for d in sorted(by_date, reverse=True) if d <= end_date), None)
+            if not s or not e:
+                continue
+            vals = [by_date[d] for d in sorted(by_date) if s <= d <= e]
+            if len(vals) < 2 or not vals[0]:
+                continue
+            returns.append((vals[-1] - vals[0]) / vals[0])
+            peak, dd = vals[0], 0.0
+            for v in vals:
+                peak = max(peak, v)
+                if peak:
+                    dd = max(dd, (peak - v) / peak)
+            drawdowns.append(dd)
+
+        if not returns:
+            return None
+
+        shares_return = sum(returns) / len(returns)
+        equity_start, equity_end = self.equity_curve[0][1], self.equity_curve[-1][1]
+        strategy_return = (equity_end - equity_start) / equity_start if equity_start else None
+
+        return {
+            "strategy_return_pct": round(strategy_return * 100, 2) if strategy_return is not None else None,
+            "shares_return_pct": round(shares_return * 100, 2),
+            "shares_max_drawdown_pct": round((sum(drawdowns) / len(drawdowns)) * 100, 2),
+            "beat_shares": bool(strategy_return is not None and strategy_return > shares_return),
+            "n_symbols": len(returns),
         }
 
     def trades_to_csv(self, path: str):
@@ -933,13 +1056,39 @@ class BacktestEngine:
             closed_trades.append(t)
             self._record_closed_trade_for_learning(t)
 
-        return BacktestResult(closed_trades, equity_curve)
+        # Bars for the underlyings actually traded, so summary() can compare
+        # against buy-and-hold shares of the same names (section 8.6).
+        underlying_bars = {
+            s: self.ts_store.get_bars(s, "1d", start.isoformat(), end.isoformat())
+            for s in sorted({t.symbol for t in closed_trades})
+        }
+        # Hand the wall clock back to strategies.base.dte() — set_as_of()
+        # repointed it at simulated days for the duration of this run.
+        set_reference_date(None)
+        return BacktestResult(closed_trades, equity_curve, underlying_bars)
+
+    def _force_exit_dte(self, strategy: str):
+        """strategies.<name>.exits.force_exit_dte, or None if the strategy
+        doesn't configure one. Only LEAPS sets it today (120, from
+        config.yaml) — LEAPS theta decays sharply inside ~6 months, so a
+        stock-replacement LEAP is closed well before expiration rather than
+        ridden to expiry like the other strategies' short-dated spreads."""
+        return (self.cfg.get("strategies", {}).get(strategy, {})
+                .get("exits", {}).get("force_exit_dte"))
 
     def _check_exit(self, t: Trade, day: date):
         exp_date = datetime.strptime(t.expiration, "%Y-%m-%d").date()
         if day >= exp_date:
             price = self.market_data.calculate_fill_price(t.legs, day, is_credit=t.is_credit)
             return "expiration", (price if price is not None else 0.0)
+
+        # Time-decay exit (LEAPS): close once DTE <= the strategy's
+        # force_exit_dte, checked before stop/take-profit the same way
+        # exit_manager.check_triggers ranks its time_decay_exit first.
+        force_dte = self._force_exit_dte(t.strategy)
+        if force_dte is not None and (exp_date - day).days <= force_dte:
+            price = self.market_data.calculate_fill_price(t.legs, day, is_credit=t.is_credit)
+            return "force_exit_dte", (price if price is not None else 0.0)
 
         # Early-assignment risk: mirrors paper_broker.check_early_assignment_risk.
         # Checked before stop-loss/take-profit since a real assignment isn't

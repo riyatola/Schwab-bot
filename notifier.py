@@ -41,6 +41,15 @@ def format_candidate_message(candidate: dict) -> str:
             lines.append(f"Suggested qty: {candidate['suggested_qty']} "
                           f"(~${candidate.get('total_risk_at_suggested_qty', 0):.2f} total risk)")
 
+        if candidate.get("strategy") == "leaps":
+            if candidate.get("delta") is not None:
+                lines.append(f"Delta: {candidate['delta']:.2f}   "
+                             f"Annualized extrinsic: {candidate.get('annualized_extrinsic_pct', 0):.2%}/yr")
+            if candidate.get("breakeven") is not None:
+                lines.append(f"Breakeven: ${candidate['breakeven']:.2f} "
+                             f"({candidate.get('breakeven_move_pct', 0):+.1%})   "
+                             f"Capital saved vs shares: {candidate.get('capital_saved_pct', 0):.0%}")
+
         score_line = f"Score: {candidate['score']:.2f}"
         if candidate.get("learning_multiplier") is not None and candidate.get("score_before_learning") is not None:
             score_line += (f" (base {candidate['score_before_learning']:.2f} × "
@@ -53,8 +62,6 @@ def format_candidate_message(candidate: dict) -> str:
             sent_line = f"Sentiment: {candidate['macro_regime']} regime ({candidate['regime_multiplier']:.2f}x)"
             if candidate.get("news_sentiment_multiplier") is not None and candidate["news_sentiment_multiplier"] != 1.0:
                 sent_line += f", news dampening {candidate['news_sentiment_multiplier']:.2f}x"
-            if candidate.get("vix_band_multiplier") is not None and candidate["vix_band_multiplier"] != 1.0:
-                sent_line += f", VIX outside band {candidate['vix_band_multiplier']:.2f}x"
             lines.append(sent_line)
         if not candidate.get("trigger_type"):
             lines.append(f"Rationale: {candidate.get('rationale', '')}")

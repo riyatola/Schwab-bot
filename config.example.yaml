@@ -1,0 +1,749 @@
+# Default configuration for schwab-options-bot.
+# Secret values (keys, tokens) are overridden by environment variables at
+# runtime on Render. DO NOT commit real secrets to this file.
+#
+# Required environment variables (Render "Environment" tab or render.yaml):
+#   BOT_MODE              - "paper" or "live" (default: paper)
+#   SCHWAB_APP_KEY        - Schwab developer app key
+#   SCHWAB_APP_SECRET     - Schwab developer app secret
+#   SCHWAB_CALLBACK_URL   - OAuth callback URL (default: https://127.0.0.1)
+#   SCHWAB_ACCOUNT_INDEX  - Which linked Schwab account index to use (default: 0)
+#   TELEGRAM_BOT_TOKEN    - Telegram bot token from @BotFather
+#   TELEGRAM_CHAT_ID      - Your Telegram chat/user ID
+#   FINNHUB_API_KEY       - Finnhub free-tier key (earnings calendar + news sentiment)
+#   FRED_API_KEY          - FRED free-tier key (macro regime: VIX, yield curve, spreads)
+
+mode: paper
+
+paper:
+  starting_cash: 5000
+  slippage_bps: 5
+  commission_per_contract: 0.65
+  early_assignment_itm_threshold_pct: 0.05
+
+schwab:
+  app_key: ""
+  app_secret: ""
+  callback_url: "https://127.0.0.1"
+  token_path: "/data/tokens.json"
+  account_index: 0
+  paper_db_path: "/data/bot.db"
+
+telegram:
+  bot_token: ""
+  chat_id: ""
+
+earnings:
+  finnhub_api_key: ""
+
+fred:
+  api_key: ""
+
+universe:
+  indices: ["NASDAQ100", "SP500"]
+  extra_symbols: ["PLTR", "GME", "AMC", "DDOG", "NET", "U", "AI", "PATH", "DOCN", "FSLY", "COIN", "HOOD", "SOFI", "AFRM", "KSS", "M", "W", "OLLI", "RUN", "PLUG", "FCEL", "NKLA", "BLDP", "SAVA", "NVAX", "BNGO", "CRSP", "EDIT", "OPEN", "RDFN", "COMP", "ARKK", "BITO", "BOIL", "SQ", "TWLO", "OKTA", "MDB", "ESTC", "ROKU", "ETSY", "PINS", "SNAP", "BYND", "UPST", "FVRR", "WIX", "ZI", "BILL", "ASAN", "HIMS", "DUOL", "ONON", "CROX", "YETI", "FIGS", "OLO", "SAM", "SHAK", "CHWY", "PTON", "SPCE", "ASTS", "LUNR", "INTA", "S", "TENB", "CYBR", "PAYO", "DLO", "NU", "PAGS", "STNE"]
+  exclude_symbols: []
+  # Curated quality names for the LEAPS scanner. Empty = fall back to
+  # NASDAQ100 + SP500 index constituents only (extra_symbols are not scanned
+  # for LEAPS — their IV is rich and the underlying can go to zero).
+  leaps_watchlist: []
+  min_avg_option_volume: 1000
+  min_underlying_price: 10
+  max_underlying_price: 2000
+
+liquidity:
+  max_leg_spread_pct: 0.20
+
+scan:
+  poll_interval_seconds: 900
+  market_hours_only: true
+
+strategies:
+  credit_spreads:
+    enabled: true
+    min_iv_rank: 50
+    min_iv_percentile: 60
+    target_short_delta: 0.20
+    min_credit_to_width_ratio: 0.25
+    dte_min: 21
+    dte_max: 45
+    max_leg_spread_pct: 0.20
+  directional:
+    enabled: true
+    trend_lookback_days: 20
+    volume_multiple_trigger: 1.5
+    min_iv_rank: 20
+    max_iv_rank: 60
+    dte_min: 30
+    dte_max: 60
+    use_rsi_filter: true
+    rsi_threshold: 55
+    rsi_min: 55
+    use_adx_filter: true
+    adx_min: 25
+  earnings_vol:
+    enabled: true
+    days_before_earnings: 7
+    min_expected_move_edge: 0.10
+    dte_min: 3
+    dte_max: 10
+    max_leg_spread_pct: 0.20
+  wheel:
+    enabled: true
+    csp_target_delta: 0.25
+    covered_call_target_delta: 0.25
+    dte_min: 21
+    dte_max: 45
+    max_leg_spread_pct: 0.20
+  leaps:
+    enabled: true
+    variant: stock_replacement
+    dte_min: 365
+    dte_max: 730
+    target_delta: 0.80
+    min_delta: 0.70
+    max_delta: 0.90
+    min_iv_rank: 0
+    max_iv_rank: 50
+    trend_lookback_days: 126
+    min_trend_strength: 0.2
+    max_extension_pct: 0.15
+    max_annualized_extrinsic_pct: 0.08
+    max_leg_spread_pct: 0.10
+    min_open_interest: 50
+    avoid_earnings_within_days: 3
+    max_premium_per_contract_dollars: null
+    min_score: 0.55
+    cooldown_days: 7
+    max_chain_fetches_per_cycle: 60
+    exits:
+      force_exit_dte: 120
+
+risk:
+  max_risk_per_sector_pct: 0.04
+  max_risk_per_portfolio_pct: 0.20
+  max_risk_per_trade_pct: 0.02
+  max_concurrent_positions: 4
+  max_positions_per_symbol: 1
+  max_new_trades_per_day: 5
+  respect_pdt_rule: true
+  max_positions_per_sector: 2
+  leaps:
+    max_premium_pct_per_position: 0.10
+    max_total_leaps_pct: 0.30
+    max_risk_per_sector_pct: 0.15
+  sector_map:
+    NVDA: Technology
+    AAPL: Technology
+    MSFT: Technology
+    AMZN: Consumer
+    GOOGL: Communication
+    GOOG: Communication
+    AVGO: Technology
+    META: Communication
+    TSLA: Consumer
+    BRK.B: Financials
+    WMT: Consumer
+    LLY: Healthcare
+    JPM: Financials
+    XOM: Energy
+    JNJ: Healthcare
+    V: Financials
+    MA: Financials
+    COST: Consumer
+    ORCL: Technology
+    NFLX: Consumer
+    CVX: Energy
+    MU: Technology
+    ABBV: Healthcare
+    PLTR: Technology
+    BAC: Financials
+    AMD: Technology
+    PG: Consumer Staples
+    CAT: Industrials
+    HD: Consumer
+    KO: Consumer
+    CSCO: Technology
+    GE: Industrials
+    MRK: Healthcare
+    AMAT: Technology
+    LRCX: Technology
+    MS: Financials
+    RTX: Industrials
+    PM: Consumer Staples
+    GS: Financials
+    WFC: Financials
+    UNH: Healthcare
+    GEV: Industrials
+    TMUS: Communication
+    LIN: Materials
+    IBM: Technology
+    INTC: Technology
+    MCD: Consumer
+    PEP: Consumer
+    VZ: Communication
+    AXP: Financials
+    T: Communication
+    C: Financials
+    KLAC: Technology
+    NEE: Utilities
+    AMGN: Healthcare
+    TMO: Healthcare
+    ABT: Healthcare
+    TJX: Consumer
+    TXN: Technology
+    CRM: Technology
+    DIS: Communication
+    GILD: Healthcare
+    SCHW: Financials
+    ISRG: Healthcare
+    PFE: Healthcare
+    BA: Industrials
+    ANET: Technology
+    APH: Technology
+    COP: Energy
+    ADI: Technology
+    DE: Industrials
+    BLK: Financials
+    UBER: Industrials
+    UNP: Industrials
+    HON: Industrials
+    ETN: Industrials
+    LMT: Industrials
+    QCOM: Technology
+    WELL: Real Estate
+    APP: Technology
+    DHR: Healthcare
+    BKNG: Consumer
+    LOW: Consumer
+    PANW: Technology
+    SPGI: Financials
+    CB: Financials
+    SYK: Healthcare
+    PLD: Real Estate
+    BMY: Healthcare
+    ACN: Technology
+    INTU: Technology
+    NEM: Materials
+    GLW: Technology
+    PGR: Financials
+    PH: Industrials
+    COF: Financials
+    VRTX: Healthcare
+    MDT: Healthcare
+    NOW: Technology
+    MO: Consumer Staples
+    CME: Financials
+    SO: Utilities
+    HCA: Healthcare
+    DELL: Technology
+    MCK: Healthcare
+    SBUX: Consumer
+    DUK: Utilities
+    CMCSA: Communication
+    CEG: Utilities
+    CRWD: Technology
+    ADBE: Technology
+    VRT: Industrials
+    NOC: Industrials
+    EQIX: Real Estate
+    SNDK: Technology
+    WDC: Technology
+    GD: Industrials
+    BSX: Healthcare
+    HWM: Industrials
+    WM: Industrials
+    TT: Industrials
+    CVS: Healthcare
+    BX: Financials
+    ICE: Financials
+    STX: Technology
+    WMB: Energy
+    MAR: Consumer
+    FCX: Materials
+    FDX: Industrials
+    PNC: Financials
+    UPS: Industrials
+    MRSH: Financials
+    PWR: Industrials
+    KKR: Financials
+    BK: Financials
+    ADP: Technology
+    REGN: Healthcare
+    USB: Financials
+    JCI: Industrials
+    AMT: Real Estate
+    SHW: Materials
+    MCO: Financials
+    CDNS: Technology
+    SNPS: Technology
+    CSX: Industrials
+    ORLY: Consumer
+    ABNB: Consumer
+    MMM: Industrials
+    CMI: Industrials
+    ECL: Materials
+    SLB: Energy
+    RCL: Consumer
+    ITW: Industrials
+    EOG: Energy
+    EMR: Industrials
+    MDLZ: Consumer Staples
+    KMI: Energy
+    MSI: Technology
+    VLO: Energy
+    CI: Healthcare
+    MNST: Consumer Staples
+    CRH: Materials
+    AEP: Utilities
+    PSX: Energy
+    MPC: Energy
+    HLT: Consumer
+    ROST: Consumer
+    AON: Financials
+    NKE: Consumer
+    WBD: Communication
+    CL: Consumer Staples
+    CTAS: Industrials
+    GM: Consumer
+    RSG: Industrials
+    TDG: Industrials
+    DASH: Consumer
+    APO: Financials
+    APD: Materials
+    LHX: Industrials
+    NSC: Industrials
+    ELV: Healthcare
+    HOOD: Financials
+    SRE: Utilities
+    TRV: Financials
+    OXY: Energy
+    DLR: Real Estate
+    TEL: Technology
+    COR: Healthcare
+    PCAR: Industrials
+    SPG: Real Estate
+    FTNT: Technology
+    BKR: Energy
+    TFC: Financials
+    O: Real Estate
+    AFL: Financials
+    CIEN: Technology
+    CTVA: Materials
+    OKE: Energy
+    AJG: Financials
+    AZO: Consumer
+    TGT: Consumer
+    MPWR: Technology
+    D: Utilities
+    FANG: Energy
+    TRGP: Energy
+    ALL: Financials
+    FAST: Industrials
+    LITE: Technology
+    VST: Utilities
+    ETR: Utilities
+    GWW: Industrials
+    EA: Communication
+    ADSK: Technology
+    KEYS: Technology
+    ZTS: Healthcare
+    EXC: Utilities
+    NXPI: Technology
+    XEL: Utilities
+    CAH: Healthcare
+    AME: Industrials
+    FIX: Industrials
+    NDAQ: Financials
+    TER: Technology
+    PSA: Real Estate
+    CARR: Industrials
+    COIN: Financials
+    EW: Healthcare
+    F: Consumer
+    IDXX: Healthcare
+    URI: Industrials
+    MET: Financials
+    COHR: Technology
+    CVNA: Consumer
+    GRMN: Consumer
+    BDX: Healthcare
+    KR: Consumer Staples
+    DAL: Industrials
+    YUM: Consumer
+    WAB: Industrials
+    DDOG: Technology
+    FITB: Financials
+    HSY: Consumer Staples
+    CMG: Consumer
+    PYPL: Financials
+    ODFL: Industrials
+    EBAY: Consumer
+    ED: Utilities
+    PEG: Utilities
+    AIG: Financials
+    ROK: Industrials
+    AMP: Financials
+    CBRE: Real Estate
+    DHI: Consumer
+    MSCI: Financials
+    NUE: Materials
+    EQT: Energy
+    VTR: Real Estate
+    PCG: Utilities
+    WEC: Utilities
+    HIG: Financials
+    TTWO: Communication
+    ROP: Technology
+    XYZ: Other
+    CCL: Consumer
+    LYV: Communication
+    LVS: Consumer
+    VMC: Materials
+    KDP: Consumer Staples
+    CCI: Real Estate
+    STT: Financials
+    MLM: Materials
+    MCHP: Technology
+    ADM: Consumer Staples
+    AXON: Industrials
+    SATS: Communication
+    ACGL: Financials
+    SYY: Consumer Staples
+    PRU: Financials
+    WDAY: Technology
+    EME: Industrials
+    RMD: Healthcare
+    PAYX: Technology
+    KVUE: Consumer Staples
+    GEHC: Healthcare
+    TPL: Energy
+    A: Healthcare
+    CPRT: Industrials
+    HBAN: Financials
+    KMB: Consumer Staples
+    HAL: Energy
+    HPE: Technology
+    IR: Industrials
+    MTB: Financials
+    NRG: Utilities
+    IRM: Real Estate
+    ATO: Utilities
+    DVN: Energy
+    AEE: Utilities
+    DTE: Utilities
+    IBKR: Financials
+    UAL: Industrials
+    OTIS: Industrials
+    FISV: Financials
+    CTSH: Technology
+    XYL: Industrials
+    VICI: Real Estate
+    CBOE: Financials
+    FE: Utilities
+    WAT: Healthcare
+    DOW: Materials
+    TPR: Consumer
+    PPL: Utilities
+    JBL: Technology
+    IQV: Healthcare
+    EXPE: Consumer
+    RJF: Financials
+    EIX: Utilities
+    CNP: Utilities
+    TDY: Technology
+    DOV: Industrials
+    EXR: Real Estate
+    WTW: Financials
+    BIIB: Healthcare
+    CHTR: Communication
+    STLD: Materials
+    AWK: Utilities
+    KHC: Consumer Staples
+    ROL: Industrials
+    VRSK: Industrials
+    DG: Consumer
+    HUBB: Industrials
+    EL: Consumer Staples
+    ES: Utilities
+    STZ: Consumer Staples
+    EXE: Healthcare
+    CTRA: Energy
+    NTRS: Financials
+    CFG: Financials
+    MTD: Healthcare
+    FICO: Technology
+    LYB: Materials
+    ARES: Financials
+    BG: Consumer Staples
+    WRB: Financials
+    Q: Technology
+    'ON': Technology
+    CINF: Financials
+    FIS: Financials
+    DXCM: Healthcare
+    TSCO: Consumer
+    CMS: Utilities
+    PPG: Materials
+    SYF: Financials
+    AVB: Real Estate
+    ULTA: Consumer
+    VRSN: Technology
+    DRI: Consumer
+    PHM: Consumer
+    RF: Financials
+    NI: Utilities
+    TSN: Consumer Staples
+    LH: Healthcare
+    BRO: Financials
+    EQR: Real Estate
+    CHD: Consumer Staples
+    EFX: Industrials
+    DGX: Healthcare
+    DLTR: Consumer
+    LEN: Consumer
+    VLTO: Industrials
+    STE: Healthcare
+    KEY: Financials
+    L: Financials
+    ALB: Materials
+    OMC: Communication
+    FSLR: Technology
+    WSM: Consumer
+    RL: Consumer
+    HUM: Healthcare
+    SW: Technology
+    NTAP: Technology
+    MRNA: Healthcare
+    JBHT: Industrials
+    CHRW: Industrials
+    GIS: Consumer Staples
+    TROW: Financials
+    CPAY: Financials
+    CF: Materials
+    LDOS: Technology
+    PFG: Financials
+    IP: Materials
+    DD: Materials
+    EVRG: Utilities
+    BR: Technology
+    SNA: Industrials
+    PKG: Materials
+    EXPD: Industrials
+    INCY: Healthcare
+    LUV: Industrials
+    GPN: Financials
+    IFF: Materials
+    LNT: Utilities
+    AMCR: Materials
+    NVR: Consumer
+    SBAC: Real Estate
+    WST: Healthcare
+    ZBH: Healthcare
+    WY: Real Estate
+    HPQ: Technology
+    LULU: Consumer
+    FTV: Industrials
+    PTC: Technology
+    CSGP: Real Estate
+    HOLX: Healthcare
+    AKAM: Technology
+    FFIV: Technology
+    CNC: Healthcare
+    LII: Industrials
+    BALL: Materials
+    TKO: Communication
+    VTRS: Healthcare
+    CDW: Technology
+    ESS: Real Estate
+    TRMB: Technology
+    TXT: Industrials
+    INVH: Real Estate
+    KIM: Real Estate
+    NDSN: Industrials
+    J: Industrials
+    HII: Industrials
+    PODD: Healthcare
+    GPC: Consumer
+    TYL: Technology
+    APA: Energy
+    MAA: Real Estate
+    DECK: Consumer
+    PNR: Industrials
+    IEX: Industrials
+    REG: Real Estate
+    SMCI: Technology
+    COO: Healthcare
+    BBY: Consumer
+    MKC: Consumer Staples
+    AVY: Materials
+    HST: Real Estate
+    EG: Financials
+    ERIE: Financials
+    HAS: Consumer
+    ALLE: Industrials
+    APTV: Consumer
+    CLX: Consumer Staples
+    HRL: Consumer Staples
+    BEN: Financials
+    MAS: Industrials
+    ALGN: Healthcare
+    BF.B: Consumer Staples
+    DPZ: Consumer
+    PNW: Utilities
+    FOX: Communication
+    FOXA: Communication
+    GNRC: Industrials
+    DOC: Real Estate
+    GEN: Technology
+    JKHY: Technology
+    SOLV: Healthcare
+    IT: Technology
+    SWK: Industrials
+    UDR: Real Estate
+    GDDY: Technology
+    UHS: Healthcare
+    IVZ: Financials
+    GL: Financials
+    TTD: Technology
+    AIZ: Financials
+    WYNN: Consumer
+    DVA: Healthcare
+    SJM: Consumer Staples
+    ZBRA: Technology
+    CPT: Real Estate
+    PSKY: Other
+    AES: Utilities
+    RVTY: Healthcare
+    MGM: Consumer
+    NWSA: Communication
+    BLDR: Industrials
+    FRT: Real Estate
+    AOS: Industrials
+    BAX: Healthcare
+    NCLH: Consumer
+    CRL: Healthcare
+    HSIC: Healthcare
+    BXP: Real Estate
+    TECH: Healthcare
+    TAP: Consumer Staples
+    FDS: Financials
+    SWKS: Technology
+    ARE: Real Estate
+    MOS: Materials
+    POOL: Consumer
+    CAG: Consumer Staples
+    EPAM: Technology
+    CPB: Consumer Staples
+    NWS: Communication
+    ASML: Technology
+    ARM: Technology
+    SHOP: Technology
+    PDD: Consumer
+    MRVL: Technology
+    MELI: Consumer
+    FER: Industrials
+    ALNY: Healthcare
+    MSTR: Technology
+    CCEP: Consumer Staples
+    TRI: Industrials
+    INSM: Healthcare
+    ZS: Technology
+    TEAM: Technology
+
+approval:
+  timeout_minutes: 15
+
+learning:
+  enabled: true
+  min_trades_for_multiplier: 5
+  multiplier_floor: 0.5
+  multiplier_ceiling: 1.5
+  use_ml: false
+  ml_min_training_rows: 150
+  ml_retrain_every_n_trades: 25
+  ml_model_path: "/data/learning_model.joblib"
+  ml_blend_weight: 0.3
+  outcome_poll_minutes: 45
+  report_day_of_week: "sun"
+  report_hour: 18
+
+guardrails:
+  enabled: true
+  min_trades_for_stats: 5
+  max_consecutive_losses: 3
+  min_win_rate: 0.30
+  max_cumulative_loss_dollars: 500
+  ban_duration_days: 90
+
+sentiment:
+  enabled: true
+  persistence_days: 3
+  directional_vix_min: 15.0
+  directional_vix_max: 25.0
+  directional_vix_band_multiplier: 0.0
+  vix_lookback_days: 252
+  vix_high_percentile: 80
+  vix_low_percentile: 20
+  curve_inversion_bps: 0
+  credit_spread_widen_bps: 20
+  credit_spread_tighten_bps: -10
+  breakeven_high_pct: 3.0
+  breakeven_low_pct: 1.5
+  surprise_index_high: 50
+  surprise_index_low: -50
+  put_call_ratio_high: 1.2
+  put_call_ratio_low: 0.7
+  news_extreme_threshold: 0.8
+  contrarian_dampening_factor: 0.5
+  risk_off_multipliers:
+    directional: 0.0
+    earnings_vol: 0.0
+    credit_spreads: 0.5
+    wheel: 0.5
+    leaps: 0.5
+  risk_on_multipliers:
+    directional: 1.15
+    earnings_vol: 1.15
+    credit_spreads: 1.05
+    wheel: 1.05
+    leaps: 1.10
+  neutral_multipliers:
+    directional: 1.0
+    earnings_vol: 1.0
+    credit_spreads: 1.0
+    wheel: 1.0
+    leaps: 1.0
+
+exits:
+  enabled: true
+  risk_off_stop_loss_factor: 0.5
+  use_dynamic_stops: true
+  atr_multiplier: 2.0
+  iv_adjustment_factor: 0.5
+  time_decay_factor: 0.2
+  min_stop_pct: 0.10
+  max_stop_pct: 0.50
+  default_stop_loss_pct:
+    credit_spreads: 0.50
+    directional: 0.50
+    earnings_vol: 0.50
+    wheel: 0.50
+    leaps: 0.40
+  default_take_profit_pct:
+    credit_spreads: 0.50
+    directional: 1.00
+    earnings_vol: 0.75
+    wheel: 0.50
+    leaps: 1.00
+  force_exit_dte: 7
+  approval_timeout_minutes: 10
+
+backtest:
+  max_spread_pct_skip: 0.10
+
+circuit_breaker:
+  enabled: true
+  daily_loss_limit_dollars: 1000
+  manual_kill: false
+  check_interval_seconds: 900

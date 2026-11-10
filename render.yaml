@@ -1,0 +1,53 @@
+services:
+  - type: web
+    name: schwab-options-bot
+    runtime: docker
+    repo: https://github.com/your-username/schwab-options-bot
+    region: oregon
+    plan: standard
+    dockerCommand: python scanner.py
+    dockerContext: .
+    healthCheckPath: /healthz
+    healthCheckTimeout: 10
+    numInstances: 1
+    autoDeploy: yes
+    disk:
+      name: bot-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: TZ
+        value: America/New_York
+
+      - key: BOT_MODE
+        value: paper
+
+      - key: PORT
+        value: "10000"
+
+      - key: SCHWAB_APP_KEY
+        sync: false
+
+      - key: SCHWAB_APP_SECRET
+        sync: false
+
+      - key: SCHWAB_TOKENS_JSON
+        sync: false
+
+      - key: SCHWAB_CALLBACK_URL
+        value: https://127.0.0.1
+
+      - key: SCHWAB_ACCOUNT_INDEX
+        value: "0"
+
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+
+      - key: FINNHUB_API_KEY
+        sync: false
+
+      - key: FRED_API_KEY
+        sync: false

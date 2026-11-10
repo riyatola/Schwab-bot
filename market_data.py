@@ -13,7 +13,7 @@ Endpoints used (see https://developer.schwab.com/products/trader-api--individual
                                        see note in get_earnings_date below)
 """
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import numpy as np
 
 from iv_history import IVHistoryStore
@@ -46,12 +46,22 @@ class MarketDataAdapter:
         if cache_key in self._chain_cache:
             return self._chain_cache[cache_key]
 
+        # Ask Schwab only for the expirations inside the requested window.
+        # Without this the response carries every listed expiration (LEAPS
+        # included) and we filter afterwards — wasteful, and for a wide
+        # window like LEAPS' 365-730 DTE it means downloading the entire
+        # near-dated chain for nothing. Distinct windows already get
+        # distinct cache keys above.
+        today = date.today()
+        from_date = (today + timedelta(days=max(0, dte_min))).isoformat()
+        to_date = (today + timedelta(days=dte_max)).isoformat()
+
         resp = self.client.option_chains(
             symbol=symbol,
             contractType="ALL",
             strikeCount=strike_count,
-            fromDate=None,
-            toDate=None,
+            fromDate=from_date,
+            toDate=to_date,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -89,6 +99,10 @@ class MarketDataAdapter:
             "symbol": c.get("symbol"),
             "volume": c.get("totalVolume", 0),
             "open_interest": c.get("openInterest", 0),
+            # Additive: handy for LEAPS (and anything else that wants the
+            # contract's own DTE without recomputing it from the expiration
+            # key). Existing consumers ignore unknown keys.
+            "dte": c.get("daysToExpiration"),
         }
 
     # ---------- IV rank ----------
@@ -210,11 +224,19 @@ class MarketDataAdapter:
         None if it can't be found in a freshly pulled chain. Mirrors
         BacktestMarketData.leg_spread_pct so live and backtest use the same
         liquidity gate. Used by risk_manager's hard spread gate (see
-        risk_manager.py patch below)."""
+        risk_manager.py patch below).
+
+        The chain window is derived from the leg's OWN expiration, not a
+        hardcoded 0-400 DTE range — a LEAPS leg beyond 400 DTE would
+        otherwise never be found and this would return None, which the
+        spread gate treats as "pass" (fails open), silently skipping the
+        liquidity check on exactly the long-dated contracts that need it.
+        """
         from strategies.base import parse_occ_symbol
         parsed = parse_occ_symbol(occ_symbol)
         underlying = parsed["underlying"]
-        chain = self.get_option_chain(underlying, dte_min=0, dte_max=400)
+        target_dte = (datetime.strptime(parsed["expiration"], "%Y-%m-%d").date() - date.today()).days
+        chain = self.get_option_chain(underlying, dte_min=max(0, target_dte - 7), dte_max=target_dte + 7)
         target_exp = parsed["expiration"]
         option_type = parsed["option_type"]
         target_strike = parsed["strike"]
@@ -254,17 +276,31 @@ class MarketDataAdapter:
         return resp.json()[symbol]["quote"]["lastPrice"]
 
     def _get_daily_closes(self, symbol: str, days: int) -> list[float]:
-        cache_key = (symbol, days)
-        if cache_key in self._history_cache:
-            return self._history_cache[cache_key]
-        resp = self.client.price_history(
-            symbol, periodType="year", period=1, frequencyType="daily"
-        )
-        resp.raise_for_status()
-        candles = resp.json().get("candles", [])
-        closes = [c["close"] for c in candles][-days:]
-        self._history_cache[cache_key] = closes
-        return closes
+        # One price_history pull per symbol per process, sliced per caller.
+        # Caching by (symbol, days) meant each distinct window (50-DMA vs
+        # 200-DMA vs the 252-day IV fallback) fired its own API call for the
+        # same underlying bars — wasteful across a ~600-symbol universe and a
+        # real rate-limit risk.
+        if symbol not in self._history_cache:
+            resp = self.client.price_history(
+                symbol, periodType="year", period=1, frequencyType="daily"
+            )
+            resp.raise_for_status()
+            candles = resp.json().get("candles", [])
+            self._history_cache[symbol] = [c["close"] for c in candles]
+        return self._history_cache[symbol][-days:]
+
+    def get_sma(self, symbol: str, n: int) -> float | None:
+        """Simple moving average of the last `n` daily closes, or None if
+        there isn't enough history. The LEAPS scanner uses this as its
+        long-term trend filter (price above the 200-DMA, and not extended
+        more than X% above the 50-DMA)."""
+        if not n or n <= 0:
+            return None
+        closes = self._get_daily_closes(symbol, n)
+        if len(closes) < n:
+            return None
+        return float(np.mean(closes[-n:]))
 
     # ---------- earnings ----------
 

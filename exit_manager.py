@@ -9,28 +9,28 @@ import logging
 import sqlite3
 import json
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 log = logging.getLogger("exit_manager")
 
 
 class ExitManager:
-    def __init__(self, cfg: dict, db, client, account_hash: str, market_data=None, sentiment=None):
+    def __init__(self, cfg: dict, db, client, account_hash: str, market_data=None):
         self.cfg = cfg
         self.db = db
         self.conn = db.conn
         self.client = client
         self.account_hash = account_hash
         self.market_data = market_data
-        self.sentiment = sentiment
+
+        # Default exit config if not in config.yaml
         self.exit_cfg = self.cfg.get("exits", {})
         self.enabled = self.exit_cfg.get("enabled", True)
-        self.last_risk_off_alert_date = None
 
     def get_open_trades(self):
         """Get all open trades from the trades table."""
         return self.conn.execute(
-            "SELECT id, symbol, order_json, entry_price, stop_loss, take_profit, is_credit, strategy, expiration "
+            "SELECT id, symbol, order_json, entry_price, stop_loss, take_profit, is_credit, strategy "
             "FROM trades WHERE status='EXECUTED' AND (outcome='OPEN' OR outcome IS NULL)"
         ).fetchall()
 
@@ -61,11 +61,10 @@ class ExitManager:
             current_price = None
             if self.market_data:
                 try:
-                    dte = (datetime.strptime(parsed["expiration"], "%Y-%m-%d").date() - datetime.now().date()).days
                     chain = self.market_data.get_option_chain(
                         parsed["underlying"],
                         dte_min=1,
-                        dte_max=dte + 1,
+                        dte_max=(datetime.strptime(parsed["expiration"], "%Y-%m-%d").date() - datetime.now().date()).days + 1,
                     )
                     # Find the contract in the chain
                     for exp, sides in chain.items():
@@ -114,19 +113,56 @@ class ExitManager:
                 instr = leg.get("instruction", "")
                 qty = leg.get("quantity", 0)
                 sign = 1 if instr.startswith("BUY") else -1
-                mtm += sign * current_price * (qty / 1)
+                mtm += sign * current_price * (qty / 1 if "ratio" not in locals() else 1)
 
         return round(mtm, 2) if mtm else None
 
+    def _force_exit_dte(self, strategy: str):
+        """Per-strategy forced-exit DTE (strategies.<name>.exits.force_exit_dte).
+        A position at or below this DTE gets a time-decay exit alert — for
+        LEAPS (120) that means rolling/closing well before the last ~6 months
+        of accelerated theta decay. Returns None when the strategy has no
+        such rule configured."""
+        return (self.cfg.get("strategies", {}).get(strategy, {})
+                .get("exits", {}).get("force_exit_dte"))
+
+    def _position_dte(self, order_json: str):
+        """Shortest DTE across the position's option legs, or None."""
+        from strategies.base import parse_occ_symbol
+        legs = json.loads(order_json).get("orderLegCollection", [])
+        dtes = []
+        for leg in legs:
+            occ = leg.get("instrument", {}).get("symbol")
+            if not occ:
+                continue
+            try:
+                parsed = parse_occ_symbol(occ)
+            except ValueError:
+                continue
+            exp = datetime.strptime(parsed["expiration"], "%Y-%m-%d").date()
+            dtes.append((exp - date.today()).days)
+        return min(dtes) if dtes else None
+
+    def _resolve_thresholds(self, strategy, entry_price, stop_loss, take_profit):
+        """Absolute stop/take levels (per share) win if they were set at
+        entry; otherwise fall back to per-strategy percentage levels from
+        exits.default_stop_loss_pct / exits.default_take_profit_pct. LEAPS
+        entries never set absolute levels, so theirs resolve here."""
+        exits_cfg = self.cfg.get("exits", {})
+        if stop_loss is None and entry_price:
+            pct = exits_cfg.get("default_stop_loss_pct", {}).get(strategy)
+            if pct is not None:
+                stop_loss = pct * abs(entry_price)
+        if take_profit is None and entry_price:
+            pct = exits_cfg.get("default_take_profit_pct", {}).get(strategy)
+            if pct is not None:
+                take_profit = pct * abs(entry_price)
+        return stop_loss, take_profit
+
     def check_triggers(self):
-        """Check all open trades for stop-loss/take-profit triggers and force_exit_dte."""
+        """Check all open trades for stop-loss/take-profit/time-decay triggers."""
         if not self.enabled:
             return []
-
-        # 1. Get current macro regime
-        regime = "NEUTRAL"
-        if self.sentiment and self.sentiment.cfg.get("enabled", True):
-            regime = self.sentiment.current_regime()
 
         open_trades = self.get_open_trades()
         if not open_trades:
@@ -134,8 +170,15 @@ class ExitManager:
 
         triggers = []
         for (
-            trade_id, symbol, order_json, entry_price, stop_loss, take_profit, is_credit, strategy, expiration
+            trade_id, symbol, order_json, entry_price, stop_loss, take_profit, is_credit, strategy
         ) in open_trades:
+            stop_loss, take_profit = self._resolve_thresholds(strategy, entry_price, stop_loss, take_profit)
+            force_exit_dte = self._force_exit_dte(strategy)
+            pos_dte = self._position_dte(order_json)
+
+            # Skip only if literally no exit rule can ever fire for this trade.
+            if stop_loss is None and take_profit is None and force_exit_dte is None:
+                continue
             # Skip if we already generated an exit approval
             existing_exit = self.conn.execute(
                 "SELECT id FROM approvals WHERE id IN (SELECT exit_approval_id FROM trades WHERE id=?) AND status='PENDING'",
@@ -144,89 +187,29 @@ class ExitManager:
             if existing_exit:
                 continue
 
-            # 2. Check force exit by DTE
-            strategy_exit_cfg = self.cfg.get("strategies", {}).get(strategy, {}).get("exits", {})
-            force_exit_dte = strategy_exit_cfg.get("force_exit_dte", self.exit_cfg.get("force_exit_dte", 7))
-            exp_date = None
-            remaining_days = None
-            if expiration:
-                try:
-                    exp_date = datetime.strptime(expiration, "%Y-%m-%d").date()
-                    remaining_days = (exp_date - datetime.now().date()).days
-                    if remaining_days <= force_exit_dte:
-                        # Force exit regardless of other conditions
-                        current_price = self.calculate_position_mtm(order_json)
-                        if current_price is not None:
-                            triggers.append({
-                                "trade_id": trade_id,
-                                "symbol": symbol,
-                                "strategy": strategy,
-                                "order_json": order_json,
-                                "entry_price": entry_price,
-                                "current_price": current_price,
-                                "trigger_type": "time_decay_exit",
-                            })
-                            continue  # Skip other checks for this trade
-                except ValueError:
-                    log.warning(f"Couldn't parse expiration date: {expiration}")
-
-            # Calculate dynamic stop-loss even if stored stop_loss is null
-            dynamic_stop = None
-            if entry_price is not None and exp_date is not None and remaining_days is not None:
-                # Get current IV rank and ATR for the underlying
-                iv_rank = self.market_data.get_iv_rank(symbol) if self.market_data else 50
-                atr = self.market_data.get_atr(symbol) if self.market_data else None
-                
-                # Compute base stop as percentage of entry
-                base_stop_pct = self.exit_cfg.get("default_stop_loss_pct", {}).get(strategy, 0.50)
-                
-                # Adjust for IV: higher IV -> wider stop
-                iv_adjust = 1 + (iv_rank / 100 - 0.5) * self.exit_cfg.get("iv_adjustment_factor", 0.5)  # range 0.75..1.25
-                # Adjust for time decay: as DTE decreases, tighten stop
-                dte = remaining_days
-                time_adjust = 1 - (1 - dte / force_exit_dte) * self.exit_cfg.get("time_decay_factor", 0.2)
-                # Clamp between min and max
-                dynamic_stop_pct = base_stop_pct * iv_adjust * time_adjust
-                dynamic_stop_pct = max(self.exit_cfg.get("min_stop_pct", 0.10), min(self.exit_cfg.get("max_stop_pct", 0.50), dynamic_stop_pct))
-                
-                # Calculate absolute stop loss value
-                if is_credit:
-                    dynamic_stop = entry_price * dynamic_stop_pct
-                else:
-                    dynamic_stop = entry_price * dynamic_stop_pct
-
-            # Use dynamic stop if no stored stop_loss, otherwise use stored value
-            effective_stop_loss = stop_loss if stop_loss is not None else dynamic_stop
-            if effective_stop_loss is None and take_profit is None:
-                continue
-
             # Get current MTM
             current_price = self.calculate_position_mtm(order_json)
             if current_price is None:
                 continue
 
-            # Apply risk-off tightening if needed
-            if self.sentiment and self.sentiment.cfg.get("enabled", True):
-                regime = self.sentiment.current_regime()
-                factor = self.exit_cfg.get("risk_off_stop_loss_factor", 0.5)
-                if regime == "RISK_OFF" and strategy in ("directional", "earnings_vol") and effective_stop_loss is not None:
-                    effective_stop_loss = effective_stop_loss * factor
-
-            # Check triggers
+            # Check triggers. Time-decay (per-strategy force_exit_dte) takes
+            # priority — it's a scheduled exit, not a price-driven one.
             trigger_type = None
-            if is_credit:
+            if force_exit_dte is not None and pos_dte is not None and pos_dte <= force_exit_dte:
+                trigger_type = "time_decay_exit"
+            elif is_credit:
                 # For credit trades:
-                # - Stop loss: entry - current >= effective_stop_loss (losing money)
+                # - Stop loss: entry - current >= stop_loss (losing money)
                 # - Take profit: entry - current <= -take_profit (making money)
-                if effective_stop_loss is not None and (entry_price - current_price) >= effective_stop_loss:
+                if stop_loss is not None and (entry_price - current_price) >= stop_loss:
                     trigger_type = "stop_loss"
                 elif take_profit is not None and (entry_price - current_price) <= -take_profit:
                     trigger_type = "take_profit"
             else:
                 # For debit trades:
-                # - Stop loss: current - entry <= -effective_stop_loss
+                # - Stop loss: current - entry <= -stop_loss
                 # - Take profit: current - entry >= take_profit
-                if effective_stop_loss is not None and (current_price - entry_price) <= -effective_stop_loss:
+                if stop_loss is not None and (current_price - entry_price) <= -stop_loss:
                     trigger_type = "stop_loss"
                 elif take_profit is not None and (current_price - entry_price) >= take_profit:
                     trigger_type = "take_profit"
@@ -239,10 +222,8 @@ class ExitManager:
                     "order_json": order_json,
                     "entry_price": entry_price,
                     "current_price": current_price,
+                    "is_credit": is_credit,
                     "trigger_type": trigger_type,
-                    "regime": regime,
-                    "stop_loss_original": stop_loss,
-                    "stop_loss_effective": effective_stop_loss,
                 })
 
         return triggers
@@ -270,6 +251,9 @@ class ExitManager:
                 "occ_symbol": leg.get("instrument", {}).get("symbol"),
                 "instruction": exit_instr,
                 "ratio": 1,
+                # Preserve the original contract count so a multi-contract
+                # LEAPS exit closes the whole position, not just one lot.
+                "quantity": leg.get("quantity", 1),
             })
 
         return {
@@ -293,16 +277,15 @@ def build_exit_order_payload(candidate: dict) -> dict:
     """Build Schwab order payload for exit, same pattern as build_order_payload in executor.py."""
     import json
     legs = candidate["legs"]
-    # Find original qty from original trade?
-    # Wait, original order has qty in order_json, let's get from candidate?
-    # For now, assume 1 contract per leg (we can refine later)
-    qty = 1
 
     order_legs = []
     for leg in legs:
         order_legs.append({
             "instruction": leg["instruction"],
-            "quantity": qty * leg.get("ratio", 1),
+            # Use the leg's own contract count (carried from the original
+            # order by build_exit_candidate); hardcoding 1 broke
+            # multi-contract exits.
+            "quantity": leg.get("quantity", 1) * leg.get("ratio", 1),
             "instrument": {
                 "symbol": leg["occ_symbol"],
                 "assetType": "OPTION",

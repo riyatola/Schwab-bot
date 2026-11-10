@@ -102,15 +102,42 @@ class Db:
         )
         self.conn.commit()
         return trade_id
-def open_position_risk_by_sector(self, sector_map: dict) -> dict:
-    rows = self.conn.execute(
-        "SELECT a.candidate_json FROM trades t JOIN approvals a ON t.approval_id = a.id "
-        "WHERE t.status='EXECUTED' AND (t.outcome='OPEN' OR t.outcome IS NULL)"
-    ).fetchall()
-    by_sector = {}
-    for (candidate_json,) in rows:
-        c = json.loads(candidate_json)
-        sector = sector_map.get(c.get("symbol", "").upper(), "Unknown")
-        risk = (c.get("max_loss_per_contract") or 0) * (c.get("suggested_qty") or 1)
-        by_sector[sector] = by_sector.get(sector, 0.0) + risk
-    return by_sector
+
+    def open_position_risk_by_sector(self, sector_map: dict) -> dict:
+        rows = self.conn.execute(
+            "SELECT a.candidate_json FROM trades t JOIN approvals a ON t.approval_id = a.id "
+            "WHERE t.status='EXECUTED' AND (t.outcome='OPEN' OR t.outcome IS NULL)"
+        ).fetchall()
+        by_sector = {}
+        for (candidate_json,) in rows:
+            c = json.loads(candidate_json)
+            sector = sector_map.get(c.get("symbol", "").upper(), "Unknown")
+            risk = (c.get("max_loss_per_contract") or 0) * (c.get("suggested_qty") or 1)
+            by_sector[sector] = by_sector.get(sector, 0.0) + risk
+        return by_sector
+
+    def open_leaps_premium(self) -> float:
+        """Sum of committed premium (max_loss_per_contract * qty) across all
+        open LEAPS trades, for risk_manager's total-LEAPS-exposure gate."""
+        rows = self.conn.execute(
+            "SELECT a.candidate_json FROM trades t JOIN approvals a ON t.approval_id = a.id "
+            "WHERE t.status='EXECUTED' AND t.strategy='leaps' AND (t.outcome='OPEN' OR t.outcome IS NULL)"
+        ).fetchall()
+        total = 0.0
+        for (candidate_json,) in rows:
+            c = json.loads(candidate_json)
+            total += (c.get("max_loss_per_contract") or 0) * (c.get("suggested_qty") or 1)
+        return total
+
+    def recent_approval_exists(self, symbol: str, strategy: str, days: int) -> bool:
+        """True if an approval for this symbol+strategy was created within
+        the last `days` days (any status). Used for LEAPS cooldown dedupe so
+        a slow-moving signal doesn't re-alert every cycle."""
+        if not days or days <= 0:
+            return False
+        cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        row = self.conn.execute(
+            "SELECT 1 FROM approvals WHERE symbol=? AND strategy=? AND created_at >= ? LIMIT 1",
+            (symbol, strategy, cutoff),
+        ).fetchone()
+        return row is not None

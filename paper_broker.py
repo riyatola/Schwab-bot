@@ -277,6 +277,17 @@ class PaperBrokerClient:
             log.warning("Paper order failed to fill: %s", e)
             return FakeResponse(400, {}, text=str(e))
 
+        # Buying-power check: reject a debit order that would push paper cash
+        # negative. Without this a large LEAP debit silently drives the paper
+        # account underwater and every downstream P&L number is meaningless.
+        total_cash_delta = sum(f[4] for f in filled_legs)
+        cash = self._get_cash()
+        if cash + total_cash_delta < 0:
+            msg = (f"Insufficient paper buying power: order requires ${-total_cash_delta:,.2f}, "
+                   f"account has ${cash:,.2f}")
+            log.warning("Paper order rejected — %s", msg)
+            return FakeResponse(400, {}, text=msg)
+
         # All legs quoted successfully — commit the fills atomically.
         now = datetime.utcnow().isoformat()
         for parsed, side, qty, fill_price, cash_delta in filled_legs:

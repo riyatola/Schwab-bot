@@ -90,6 +90,14 @@ def synthetic_chain(spot: float, as_of: date, expirations: list[date], iv_estima
                     "ask": round(mid + half_spread, 2),
                     "delta": round(delta, 4),
                     "iv": iv_estimate,
+                    # Large constants so liquidity filters don't reject every
+                    # synthetic contract: LEAPS drops calls below
+                    # strategies.leaps.min_open_interest using the contract's
+                    # open_interest (same field _parse_contract populates
+                    # live), which would otherwise be absent here and filter
+                    # the whole chain out.
+                    "open_interest": 1000,
+                    "volume": 1000,
                     "symbol": None,  # filled in by the backtest engine's occ_symbol() call if needed
                 })
         chain[exp.isoformat()] = {"calls": calls, "puts": puts}

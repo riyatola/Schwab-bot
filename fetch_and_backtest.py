@@ -13,7 +13,12 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
 def fetch_and_store_history(client, symbols: list[str], ts_store: TimeSeriesStore):
-    """Fetch last 2 years of daily OHLCV from Schwab and store in TimeSeriesStore."""
+    """Fetch daily OHLCV from Schwab and store in TimeSeriesStore.
+
+    Pulls 5 years, not 2: the LEAPS scanner needs >= 200 trading days of
+    warm-up for its 200-DMA filter before it can produce a signal, and a
+    12-24 month hold barely fits inside a 2-year window otherwise.
+    """
     # Get symbols we already have history for
     existing_symbols = {s["symbol"] for s in ts_store.coverage_summary()}
     
@@ -27,7 +32,7 @@ def fetch_and_store_history(client, symbols: list[str], ts_store: TimeSeriesStor
             resp = client.price_history(
                 symbol, 
                 periodType="year",
-                period=2,  # Last 2 years
+                period=5,  # Last 5 years: LEAPS needs 200+ trading days of warm-up
                 frequencyType="daily"
             )
             resp.raise_for_status()

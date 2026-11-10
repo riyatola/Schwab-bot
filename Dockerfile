@@ -1,16 +1,33 @@
-FROM python:3.9-slim-buster
+FROM python:3.11-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /app
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc \
+        libpq-dev \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Expose port 80 if your bot has any web-facing components (e.g., a simple health check, if added)
-# EXPOSE 80
+RUN cp config.example.yaml config.yaml
 
-# Command to run the bot. Assuming scanner.py is the main entry point.
-# Adjust if your main script is different or if you need to pass specific arguments.
-# For continuous operation, `scanner.py` is usually the one.
+RUN mkdir -p /data && chmod 777 /data
+
+VOLUME ["/data"]
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=60s --timeout=10s --start-period=120s --retries=5 \
+    CMD curl -f http://localhost:${PORT:-8080}/healthz || exit 1
+
 CMD ["python", "scanner.py"]

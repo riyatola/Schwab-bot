@@ -20,10 +20,25 @@ scan(client, symbols, cfg) -> list[dict] returning candidate dicts shaped like:
 
 from datetime import datetime, date
 
+# In live trading dte() is measured from the wall clock. A backtest, though,
+# replays history, so the "today" a strategy sees must be the bar date being
+# simulated — otherwise a historical LEAPS chain (expirations generated
+# relative to the simulated day) gets a dte measured against the real clock
+# and falls outside strategies.leaps[dte_min, dte_max], silently yielding
+# zero candidates. BacktestMarketData.set_as_of() points this at the
+# simulated day. Live code never calls set_reference_date(), so it stays
+# None and dte() keeps using the real date.
+_REFERENCE_DATE = None
+
+
+def set_reference_date(d: date | None):
+    global _REFERENCE_DATE
+    _REFERENCE_DATE = d
+
 
 def dte(expiration_str: str) -> int:
     exp = datetime.strptime(expiration_str, "%Y-%m-%d").date()
-    return (exp - date.today()).days
+    return (exp - (_REFERENCE_DATE or date.today())).days
 
 
 def iv_rank(current_iv: float, iv_52w_low: float, iv_52w_high: float) -> float:
