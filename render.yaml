@@ -1,14 +1,12 @@
 services:
-  - type: web
+  - type: worker
     name: schwab-options-bot
     runtime: docker
-    repo: https://github.com/your-username/schwab-options-bot
+    repo: https://github.com/riyatola/Schwab-bot
     region: oregon
     plan: standard
     dockerCommand: python scanner.py
     dockerContext: .
-    healthCheckPath: /healthz
-    healthCheckTimeout: 10
     numInstances: 1
     autoDeploy: yes
     disk:
@@ -22,17 +20,14 @@ services:
       - key: BOT_MODE
         value: paper
 
-      - key: PORT
-        value: "10000"
-
       - key: SCHWAB_APP_KEY
         sync: false
 
       - key: SCHWAB_APP_SECRET
         sync: false
 
-      - key: SCHWAB_TOKENS_JSON
-        sync: false
+      - key: SCHWAB_TOKEN_PATH
+        value: /data/tokens.json
 
       - key: SCHWAB_CALLBACK_URL
         value: https://127.0.0.1
