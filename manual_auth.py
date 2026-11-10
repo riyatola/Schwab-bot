@@ -9,8 +9,9 @@ Usage:
    python manual_auth.py "https://127.0.0.1/?code=..."
 """
 import sys
-import yaml
 import logging
+
+from config_env import load_config
 
 def main():
     if len(sys.argv) < 2:
@@ -24,8 +25,7 @@ def main():
     callback_url = sys.argv[1]
     print(f"Callback URL received: {callback_url[:80]}...")
 
-    with open("config.yaml", "r") as f:
-        cfg = yaml.safe_load(f)
+    cfg = load_config()
 
     schwab_cfg = cfg["schwab"]
     token_path = schwab_cfg.get("token_path", "./tokens.json")

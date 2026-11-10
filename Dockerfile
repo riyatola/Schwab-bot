@@ -19,9 +19,12 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 COPY . .
 
-RUN cp config.example.yaml config.yaml
-
 RUN mkdir -p /data && chmod 777 /data
+
+# Config comes from a mounted config.yaml (e.g. a Render "Secret File" at
+# /app/config.yaml, or a path pointed to by CONFIG_PATH). Secrets in it are
+# overridden by environment variables at runtime — see config_env.py.
+ENV CONFIG_PATH=/app/config.yaml
 
 VOLUME ["/data"]
 

@@ -1,9 +1,9 @@
 
 # fetch_and_backtest.py
-import yaml
 import logging
 from datetime import datetime, date
 from auth import build_client
+from config_env import load_config
 from timeseries import TimeSeriesStore
 from backtest_engine import BacktestEngine, run_walk_forward
 from scanner import get_universe
@@ -60,9 +60,8 @@ def fetch_and_store_history(client, symbols: list[str], ts_store: TimeSeriesStor
             log.exception("   Failed to fetch/store %s: %s", symbol, e)
 
 def main():
-    # Load config
-    with open("config.yaml", "r") as f:
-        cfg = yaml.safe_load(f)
+    # Load config (env vars override secrets — see config_env.py)
+    cfg = load_config()
 
     # Get authenticated Schwab client
     log.info("Authenticating with Schwab...")

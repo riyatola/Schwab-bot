@@ -24,11 +24,13 @@ Usage:
 import asyncio
 import argparse
 import logging
+import os
+import threading
 import time
-import yaml
 from datetime import date
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
+import config_env
 from auth import build_client, get_account_hash
 from market_data import MarketDataAdapter
 from risk_manager import RiskManager
@@ -54,9 +56,34 @@ logging.basicConfig(
 log = logging.getLogger("scanner")
 
 
-def load_config(path="config.yaml") -> dict:
-    with open(path) as f:
-        return yaml.safe_load(f)
+def load_config(path: str | None = None) -> dict:
+    """Load config.yaml and apply environment-variable overrides (secrets +
+    mode). See config_env.py for the env var list and precedence."""
+    return config_env.load_config(path)
+
+
+def start_health_server(port: int) -> None:
+    """Minimal /healthz endpoint so a host (Render, Docker HEALTHCHECK) can
+    confirm the process is up. Runs in a daemon thread; the trading loop is
+    unaffected. Binds 0.0.0.0 so it's reachable from the platform's proxy."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path in ("/healthz", "/health"):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"ok")
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, *args):  # silence per-request logging
+            pass
+
+    server = ThreadingHTTPServer(("0.0.0.0", port), _Handler)
+    threading.Thread(target=server.serve_forever, daemon=True, name="healthz").start()
+    log.info("Health endpoint listening on 0.0.0.0:%d (/healthz)", port)
 
 
 INDEX_NAME_MAP = {
@@ -286,6 +313,7 @@ async def main():
     args = parser.parse_args()
 
     cfg = load_config()
+    start_health_server(int(os.environ.get("PORT", "8080")))
     client = build_client(cfg)
 
     if args.auth_only:
